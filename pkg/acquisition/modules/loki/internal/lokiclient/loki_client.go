@@ -2,6 +2,8 @@ package lokiclient
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -16,8 +19,9 @@ import (
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/tomb.v2"
 
-	"github.com/crowdsecurity/crowdsec/pkg/apiclient/useragent"
 	"maps"
+
+	"github.com/crowdsecurity/crowdsec/pkg/apiclient/useragent"
 )
 
 type LokiClient struct {
@@ -28,6 +32,8 @@ type LokiClient struct {
 	fail_start            time.Time
 	currentTickerInterval time.Duration
 	requestHeaders        map[string]string
+
+	client http.Client
 }
 
 type Config struct {
@@ -38,6 +44,11 @@ type Config struct {
 
 	Username string
 	Password string
+
+	TLSEnabled bool
+	CaCert     string
+	Cert       string
+	Key        string
 
 	Since time.Duration
 	Until time.Duration
@@ -310,15 +321,57 @@ func (lc *LokiClient) Get(ctx context.Context, url string) (*http.Response, erro
 	for k, v := range lc.requestHeaders {
 		request.Header.Add(k, v)
 	}
-	return http.DefaultClient.Do(request)
+
+	return lc.client.Do(request)
 }
 
-func NewLokiClient(config Config) *LokiClient {
+func NewLokiClient(config Config) (*LokiClient, error) {
 	headers := make(map[string]string)
 	maps.Copy(headers, config.Headers)
 	if config.Username != "" || config.Password != "" {
 		headers["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(config.Username+":"+config.Password))
 	}
+
+	var client http.Client
+
+	if config.TLSEnabled {
+		tlsconfig := tls.Config{}
+
+		if config.CaCert != "" {
+			caCert, err := os.ReadFile(config.CaCert)
+
+			if err != nil {
+				return nil, errors.New("failed to load ca cert")
+			}
+			caCertPool := x509.NewCertPool()
+			caCertPool.AppendCertsFromPEM(caCert)
+
+			tlsconfig.RootCAs = caCertPool
+		}
+
+		if config.Cert != "" && config.Key != "" {
+			certs, err := tls.LoadX509KeyPair(config.Cert, config.Key)
+
+			if err != nil {
+				return nil, errors.New("failed to load cert and key")
+			}
+
+			tlsconfig.Certificates = append(tlsconfig.Certificates, certs)
+		}
+
+		transport := http.Transport{
+			TLSClientConfig: &tlsconfig,
+		}
+
+		client = http.Client{
+			Transport: &transport,
+		}
+
+	} else {
+		client = *http.DefaultClient
+	}
+
 	headers["User-Agent"] = useragent.Default()
-	return &LokiClient{Logger: log.WithField("component", "lokiclient"), config: config, requestHeaders: headers}
+
+	return &LokiClient{Logger: log.WithField("component", "lokiclient"), config: config, requestHeaders: headers, client: client}, nil
 }

@@ -36,6 +36,13 @@ type LokiAuthConfiguration struct {
 	Password string `yaml:"password"`
 }
 
+type LokiTLSConfiguration struct {
+	Enabled bool   `yaml:"enabled"`
+	CaCert  string `yaml:"cacert"`
+	Cert    string `yaml:"cert"`
+	Key     string `yaml:"key"`
+}
+
 type LokiConfiguration struct {
 	URL                               string                `yaml:"url"`    // Loki url
 	Prefix                            string                `yaml:"prefix"` // Loki prefix
@@ -46,6 +53,7 @@ type LokiConfiguration struct {
 	Headers                           map[string]string     `yaml:"headers"`        // HTTP headers for talking to Loki
 	WaitForReady                      time.Duration         `yaml:"wait_for_ready"` // Retry interval, default is 10 seconds
 	Auth                              LokiAuthConfiguration `yaml:"auth"`
+	TLS                               LokiTLSConfiguration  `yaml:"tls"`
 	MaxFailureDuration                time.Duration         `yaml:"max_failure_duration"` // Max duration of failure before stopping the source
 	NoReadyCheck                      bool                  `yaml:"no_ready_check"`       // Bypass /ready check before starting
 	configuration.DataSourceCommonCfg `yaml:",inline"`
@@ -133,12 +141,16 @@ func (l *LokiSource) Configure(config []byte, logger *log.Entry, metricsLevel me
 		Since:           l.Config.Since,
 		Username:        l.Config.Auth.Username,
 		Password:        l.Config.Auth.Password,
+		TLSEnabled:      l.Config.TLS.Enabled,
+		CaCert:          l.Config.TLS.CaCert,
+		Cert:            l.Config.TLS.Cert,
+		Key:             l.Config.TLS.Key,
 		FailMaxDuration: l.Config.MaxFailureDuration,
 	}
 
-	l.Client = lokiclient.NewLokiClient(clientConfig)
+	l.Client, err = lokiclient.NewLokiClient(clientConfig)
 	l.Client.Logger = logger.WithFields(log.Fields{"component": "lokiclient", "source": l.Config.URL})
-	return nil
+	return err
 }
 
 func (l *LokiSource) ConfigureByDSN(dsn string, labels map[string]string, logger *log.Entry, uuid string) error {
@@ -249,10 +261,10 @@ func (l *LokiSource) ConfigureByDSN(dsn string, labels map[string]string, logger
 		DelayFor: int(l.Config.DelayFor / time.Second),
 	}
 
-	l.Client = lokiclient.NewLokiClient(clientConfig)
+	l.Client, err = lokiclient.NewLokiClient(clientConfig)
 	l.Client.Logger = logger.WithFields(log.Fields{"component": "lokiclient", "source": l.Config.URL})
 
-	return nil
+	return err
 }
 
 func (l *LokiSource) GetMode() string {
